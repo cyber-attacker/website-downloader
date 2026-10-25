@@ -311,7 +311,8 @@ class Toast(QFrame):
 
 
 class ToastHost(QWidget):
-    """Transparent overlay in the top-right corner stacking toasts."""
+    """Overlay in the top-right corner stacking toasts — bounded to a small
+    strip so it can never sit over content, and click-transparent anyway."""
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
@@ -325,8 +326,7 @@ class ToastHost(QWidget):
     def eventFilter(self, obj, event):            # noqa: N802 — Qt naming
         from PySide6.QtCore import QEvent
         if obj is self.parent() and event.type() in (QEvent.Resize, QEvent.Show):
-            self.setGeometry(self.parent().width() - 360, 12, 348,
-                             self.parent().height() - 24)
+            self.setGeometry(self.parent().width() - 356, 8, 348, 300)
         return False
 
     def toast(self, message: str, severity: str = "info", msec: int = 4000):

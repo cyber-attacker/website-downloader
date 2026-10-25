@@ -198,6 +198,7 @@ class NewProjectWizard(QDialog):
         self._profile_cards: dict[str, Card] = {}
         for name, (desc, _cfg) in PROFILES.items():
             card = Card()
+            card.setProperty("choice", True)
             card.setCursor(Qt.PointingHandCursor)
             inner = QVBoxLayout(card)
             inner.setContentsMargins(16, 10, 16, 10)
@@ -217,11 +218,10 @@ class NewProjectWizard(QDialog):
 
     def _pick_profile(self, name: str):
         self._profile = name
-        tok = theme_engine.tokens()
         for n, card in self._profile_cards.items():
-            card.setStyleSheet(
-                f"border: 2px solid {tok['accent']};" if n == name else
-                f"border: 1px solid {tok['border']};")
+            card.setProperty("selected", n == name)
+            card.style().unpolish(card)
+            card.style().polish(card)
 
     # ------------------------------------------------------- step 3: scope
 

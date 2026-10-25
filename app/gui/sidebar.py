@@ -70,12 +70,13 @@ class Sidebar(QFrame):
 
         lay.addStretch(1)
 
-        # collapse toggle pinned at the bottom
+        # collapse toggle pinned at the bottom (clicked passes its checked
+        # state — drop it so toggle_collapse() treats this as a plain toggle)
         self._collapse_btn = QToolButton()
         self._collapse_btn.setProperty("nav", True)
         self._collapse_btn.setIcon(widgets.icon("chevron-left"))
         self._collapse_btn.setText("")
-        self._collapse_btn.clicked.connect(self.toggle_collapse)
+        self._collapse_btn.clicked.connect(lambda _checked=False: self.toggle_collapse())
         lay.addWidget(self._collapse_btn)
 
         self.version = QLabel(f"v{__version__}")

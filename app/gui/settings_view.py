@@ -150,11 +150,11 @@ class SettingsView(QWidget):
             pm = _swatch_pixmap(name)
             b.setIcon(pm)
             b.setIconSize(pm.size())
+            b.setProperty("swatch", True)
             b.setToolTip({"light": "Light", "dark": "Dark",
                           "midnight": "Midnight (OLED)",
                           "high_contrast": "High contrast",
                           "system": "Follow the OS"}[name])
-            b.setProperty("variant", "secondary")
             b.clicked.connect(lambda _c, n=name: self._pick_theme(n))
             theme_strip.addWidget(b)
             self._theme_buttons[name] = b
@@ -172,8 +172,8 @@ class SettingsView(QWidget):
             b.setFixedSize(30, 30)
             b.setIcon(_accent_pixmap(color))
             b.setIconSize(_accent_pixmap(color).size())
+            b.setProperty("swatch", True)
             b.setToolTip(name.title())
-            b.setProperty("variant", "secondary")
             b.clicked.connect(lambda _c, n=name: self._pick_accent(n))
             accent_lay.addWidget(b)
             self._accent_buttons[name] = b
@@ -236,17 +236,18 @@ class SettingsView(QWidget):
         self._sync_visual_state()
 
     def _sync_visual_state(self):
-        tok = theme_engine.tokens()
+        # selection via dynamic property + repolish — never per-widget
+        # stylesheets, which would fight the theme engine
         for name, b in self._theme_buttons.items():
-            checked = name == self._theme
-            b.setStyleSheet(
-                f"border: 2px solid {tok['accent']};" if checked
-                else f"border: 1px solid {tok['border']};")
+            if (name == self._theme) != (b.property("selected") is True):
+                b.setProperty("selected", name == self._theme)
+                b.style().unpolish(b)
+                b.style().polish(b)
         for name, b in self._accent_buttons.items():
-            checked = name == self._accent
-            b.setStyleSheet(
-                f"border: 2px solid {tok['accent']}; border-radius: 15px;" if checked
-                else "border: 1px solid transparent; border-radius: 15px;")
+            if (name == self._accent) != (b.property("selected") is True):
+                b.setProperty("selected", name == self._accent)
+                b.style().unpolish(b)
+                b.style().polish(b)
 
     def _browse_root(self):
         d = QFileDialog.getExistingDirectory(self, "Choose the projects folder")

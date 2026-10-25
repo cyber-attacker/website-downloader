@@ -308,6 +308,17 @@ QFrame#Toast {{ background: {t['surface']}; border: {t['border_w']} solid {t['bo
                  border-radius: 10px; }}
 QLabel#ToastCountdown {{ background: {t['accent']}; border: none; max-height: 3px; }}
 
+/* ---------- selectable tiles (theme swatches, profile cards) ---------- */
+QPushButton[swatch="true"] {{ border: 1px solid {t['border']}; border-radius: 8px;
+                              padding: 2px; background: {t['surface']}; }}
+QPushButton[swatch="true"]:hover {{ border-color: {t['text2']}; }}
+QPushButton[swatch="true"][selected="true"] {{ border: 2px solid {t['accent']}; }}
+QFrame[choice="true"] {{ border: 1px solid {t['border']}; border-radius: 12px; }}
+QFrame[choice="true"][selected="true"] {{
+    border: 2px solid {t['accent']}; background: {t['accent_tint']}; }}
+QFrame#HeaderBar {{ background: {t['bg']}; border: none; }}
+QFrame#StatusBar {{ background: {t['bg']}; border-top: {t['border_w']} solid {t['border']}; }}
+
 /* ---------- dialogs ---------- */
 QDialog {{ background: {t['bg']}; }}
 QMessageBox {{ background: {t['surface']}; }}

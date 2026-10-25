@@ -38,6 +38,8 @@ def _have_deps() -> bool:
     try:
         import PySide6  # noqa: F401
         import aiohttp  # noqa: F401
+        import aiosqlite  # noqa: F401
+        import selectolax  # noqa: F401
         return True
     except ImportError:
         return False
@@ -89,8 +91,8 @@ def run() -> int:
     if not is_cli and any(a in ("-h", "--help") for a in sys.argv[1:]):
         is_cli = True
 
-    # already inside the project venv (or deps importable): run directly
-    if in_project_venv() or (not is_cli and _have_deps()):
+    # already inside the project venv: run directly
+    if in_project_venv():
         if is_cli:
             return _run_cli(args)
         from app.gui.__main__ import run as run_app
@@ -108,6 +110,14 @@ def run() -> int:
         except KeyboardInterrupt:
             proc.terminate()
             return 130
+
+    # no venv, but running in an environment where deps are importable:
+    if _have_deps():
+        if is_cli:
+            return _run_cli(args)
+        from app.gui.__main__ import run as run_app
+
+        return run_app()
 
     # no venv: offer the one-time bootstrap, then relaunch
     if _notice("Website Downloader",

@@ -1,16 +1,14 @@
-"""Main window shell (spec §4/§5): frameless window with a custom title bar
-(Windows-native hit-testing keeps drag, resize and Aero snap), persistent
-sidebar, cross-fade page transitions, toast host, command palette (Ctrl+K),
-global shortcuts, system tray with an active-download badge, drag-and-drop
-URL intake, status bar, first-run onboarding, and saved window state."""
+"""Main window shell (spec §4/§5): standard native window frame (the spec
+explicitly allows "styled standard title bar" — and it guarantees every click
+lands), persistent sidebar, cross-fade page transitions, toast host, command
+palette (Ctrl+K), global shortcuts, system tray with an active-download
+badge, drag-and-drop URL intake, status bar, first-run tips, saved state."""
 from __future__ import annotations
 
-import ctypes
 import os
-from ctypes import wintypes
 
-from PySide6.QtCore import QElapsedTimer, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -37,21 +35,13 @@ from app.gui.live_dashboard import LiveDashboard
 from app.gui.new_project_wizard import NewProjectWizard
 from app.gui.projects_view import ProjectsView
 from app.gui.settings_view import SettingsView
-from app.gui.sidebar import COLLAPSED_W, EXPANDED_W, Sidebar
+from app.gui.sidebar import Sidebar
 from app.gui.worker import ProjectWorker
 
 ORG = "WebsiteDownloader"
 APP = "Website Downloader"
 
-# Windows nonclient hit-test codes
-HTCLIENT = 1
-HTCAPTION = 2
-HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT = 10, 11, 12, 13, 14
-HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT = 15, 16, 17
-WM_NCHITTEST = 0x84
-WM_NCLBUTTONDBLCLK = 0xA3
-WM_GETMINMAXINFO = 0x24
-RESIZE_MARGIN = 6
+THEME_CYCLE = ["system", "light", "dark", "midnight", "high_contrast"]
 
 
 def app_icon() -> QIcon:
@@ -65,72 +55,53 @@ def app_icon() -> QIcon:
     p.setBrush(QColor(tok["accent"]))
     p.drawRoundedRect(4, 4, 56, 56, 14, 14)
     p.setBrush(QColor("#FFFFFF"))
-    # arrow shaft + head + tray base line
-    p.drawRect(QRectF(29, 16, 6, 20))
     from PySide6.QtGui import QPolygon
+    from PySide6.QtCore import QPoint, QRectF
+    p.drawRect(QRectF(29, 16, 6, 20))
     p.drawPolygon(QPolygon([QPoint(22, 32), QPoint(42, 32), QPoint(32, 46)]))
     p.drawRect(QRectF(20, 50, 24, 5))
     p.end()
     return QIcon(pm)
 
 
-class TitleBar(QFrame):
-    """Custom title strip: brand + minimize / maximize / close (close turns
-    red on hover, spec §4). Dragging is handled by the OS via HTCAPTION."""
+class HeaderBar(QFrame):
+    """Slim in-app strip under the native title bar: brand + quick actions.
+    Pure client widgets — every pixel is normally clickable."""
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
-        self.setObjectName("TitleBar")
-        self.setFixedHeight(40)
+        self.setObjectName("HeaderBar")
+        self.setFixedHeight(48)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 0, 6, 0)
-        lay.setSpacing(8)
+        lay.setContentsMargins(16, 6, 10, 6)
+        lay.setSpacing(10)
         self.icon_lbl = QLabel()
-        self.icon_lbl.setPixmap(app_icon().pixmap(18, 18))
+        self.icon_lbl.setPixmap(app_icon().pixmap(20, 20))
         lay.addWidget(self.icon_lbl)
-        self.title = QLabel("Website Downloader")
-        lay.addWidget(self.title)
+        self.brand = QLabel("Website Downloader")
+        f = QFont()
+        f.setPointSizeF(12.5)
+        f.setBold(True)
+        self.brand.setFont(f)
+        lay.addWidget(self.brand)
         lay.addStretch(1)
 
-        self.min_btn = self._btn("minus", "Minimize")
-        self.min_btn.clicked.connect(self.window().showMinimized)
-        self.max_btn = self._btn("square", "Maximize")
-        self.max_btn.clicked.connect(self._toggle_max)
-        self.close_btn = self._btn("times", "Close")
-        self.close_btn.clicked.connect(self.window().close)
-        for b in (self.min_btn, self.max_btn, self.close_btn):
+        self.theme_btn = widgets.icon_btn(
+            "moon", f"Theme: system — click to cycle ({' / '.join(THEME_CYCLE)})")
+        self.preview_btn = widgets.icon_btn("globe", "Preview the current mirror in your browser")
+        self.new_btn = QPushButton("New Project")
+        self.new_btn.setProperty("variant", "primary")
+        for b in (self.theme_btn, self.preview_btn, self.new_btn):
             lay.addWidget(b)
-        self._restyle()
 
-    def _btn(self, glyph: str, tip: str) -> QPushButton:
-        b = QPushButton()
-        b.setObjectName("TitleBtn")
-        b.setFixedSize(34, 28)
-        b.setToolTip(tip)
-        self._glyphs = getattr(self, "_glyphs", {})
-        self._glyphs[b] = glyph
-        return b
-
-    def _toggle_max(self):
-        w = self.window()
-        w.showNormal() if w.isMaximized() else w.showMaximized()
-
-    def _restyle(self):
+    def refresh_theme(self, theme_name: str):
+        self.icon_lbl.setPixmap(app_icon().pixmap(20, 20))
+        glyph = {"light": "sun", "dark": "moon", "midnight": "moon",
+                 "high_contrast": "adjust", "system": "desktop"}[theme_name]
         tok = theme_engine.tokens()
-        for b, glyph in getattr(self, "_glyphs", {}).items():
-            b.setIcon(widgets.icon(glyph, tok["text2"]))
-            is_close = b is self.close_btn
-            b.setStyleSheet(f"""
-                QPushButton#TitleBtn {{ background: transparent; border: none;
-                    border-radius: 4px; }}
-                QPushButton#TitleBtn:hover {{
-                    background: {'#E81123' if is_close else tok['hover']};
-                }}
-            """)
-
-    def refresh_theme(self):
-        self.icon_lbl.setPixmap(app_icon().pixmap(18, 18))
-        self._restyle()
+        self.theme_btn.setIcon(widgets.icon(glyph, tok["text2"]))
+        self.theme_btn.setToolTip(
+            f"Theme: {theme_name} — click to cycle ({' / '.join(THEME_CYCLE)})")
 
 
 class CommandPalette(QDialog):
@@ -140,7 +111,6 @@ class CommandPalette(QDialog):
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setModal(True)
         self.setFixedWidth(520)
         self.entries: list[tuple[str, str, object]] = []
@@ -179,42 +149,42 @@ class CommandPalette(QDialog):
         self.triggered.emit(payload)
 
 
-class Onboarding(QWidget):
-    """First-run welcome overlay: 2-3 pointers, dismissed once (spec §5)."""
+class TipCard(widgets.Card):
+    """Non-blocking first-run tips pinned to a corner (spec §5 onboarding,
+    without a full-window veil that would swallow clicks)."""
 
-    done = Signal()
+    dismissed = Signal()
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        lay.setAlignment(Qt.AlignCenter)
-        card = widgets.Card()
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(28, 24, 28, 24)
-        cl.setSpacing(10)
-        t = QLabel("Welcome to Website Downloader")
-        t.setProperty("heading", True)
-        cl.addWidget(t)
+        lay.setContentsMargins(18, 14, 18, 12)
+        lay.setSpacing(6)
+        head_row = QHBoxLayout()
+        t = QLabel("Welcome — quick tips")
+        t.setProperty("cardtitle", True)
+        head_row.addWidget(t)
+        head_row.addStretch(1)
+        close = widgets.icon_btn("times", "Dismiss (you can always press Ctrl+K)")
+        close.clicked.connect(self._dismiss)
+        head_row.addWidget(close)
+        lay.addLayout(head_row)
         for line in (
-            "1.  Start with New Project in the sidebar — paste a URL (or drag "
-            "one straight from your browser).",
-            "2.  Pause, resume or cancel any crawl live; killed crawls resume "
-            "byte-identically later.",
-            "3.  Press Ctrl+K anytime for the command palette; pick a theme "
-            "in Settings."):
+            "•  New Project in the sidebar — paste a URL, or drag one in from your browser.",
+            "•  Pause / resume / cancel live; killed crawls resume exactly where they stopped.",
+            "•  Ctrl+K opens the command palette; themes live in Settings."):
             lab = QLabel(line)
             lab.setWordWrap(True)
-            cl.addWidget(lab)
-        btn = QPushButton("Got it")
-        btn.setProperty("variant", "primary")
-        btn.clicked.connect(self._dismiss)
-        cl.addSpacing(8)
-        cl.addWidget(btn, 0, Qt.AlignRight)
-        lay.addWidget(card)
-        self.setStyleSheet("background: rgba(0,0,0,0.45);")
+            lay.addWidget(lab)
+        got = QPushButton("Got it")
+        got.setProperty("variant", "primary")
+        got.clicked.connect(self._dismiss)
+        lay.addWidget(got, 0, Qt.AlignRight)
+        self.setFixedWidth(360)
+        self.adjustSize()
 
     def _dismiss(self):
-        self.done.emit()
+        self.dismissed.emit()
         self.hide()
         self.deleteLater()
 
@@ -223,11 +193,11 @@ class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP)
-        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
-        self.setMinimumSize(880, 560)
-        self.settings = QSettingsCompat()
         self.setWindowIcon(app_icon())
+        self.resize(1100, 700)
+        self.setMinimumSize(900, 600)
         self.setAcceptDrops(True)          # URL drop from a browser (spec §5)
+        self.settings = QSettingsCompat()
 
         self.theme = str(self.settings.value("theme", "system"))
         self.accent = str(self.settings.value("accent", "blue"))
@@ -237,8 +207,10 @@ class MainWindow(QWidget):
         root_lay.setContentsMargins(0, 0, 0, 0)
         root_lay.setSpacing(0)
 
-        self.titlebar = TitleBar(self)
-        root_lay.addWidget(self.titlebar)
+        self.header = HeaderBar(self)
+        self.header.theme_btn.clicked.connect(self._cycle_theme)
+        self.header.new_btn.clicked.connect(lambda: self.new_project())
+        root_lay.addWidget(self.header)
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -246,7 +218,7 @@ class MainWindow(QWidget):
         self.sidebar = Sidebar()
         self.sidebar.navigate.connect(self._goto)
         self.sidebar.collapse_toggled.connect(
-            lambda collapsed: self.settings.setValue("sidebar_collapsed", collapsed))
+            lambda c: self.settings.setValue("sidebar_collapsed", c))
         body.addWidget(self.sidebar)
 
         # pages: projects (0), live dashboard (1), settings (2)
@@ -268,6 +240,7 @@ class MainWindow(QWidget):
 
         # status bar (spec §5): ~24px, running info + network dot
         self.status_bar = QFrame()
+        self.status_bar.setObjectName("StatusBar")
         self.status_bar.setFixedHeight(24)
         sb_lay = QHBoxLayout(self.status_bar)
         sb_lay.setContentsMargins(14, 2, 14, 2)
@@ -284,33 +257,29 @@ class MainWindow(QWidget):
 
         # wiring
         self.projects_view.resume_requested.connect(self.start_project)
-        self.projects_view.new_requested.connect(self.new_project)
+        self.projects_view.new_requested.connect(lambda: self.new_project())
         self.projects_view.open_summary_requested.connect(self._open_saved_summary)
         self.settings_view.theme_changed.connect(self.set_theme)
         self.settings_view.accent_changed.connect(self.set_accent)
         self.settings_view.minimized_check.toggled.connect(
             lambda v: self.settings.setValue("start_minimized", v))
-        self.settings_view.root_edit.textChanged.connect(
-            lambda text: self._update_root(text))
+        self.settings_view.root_edit.textChanged.connect(self._update_root)
 
         self._build_tray()
         self._build_palette()
         self._build_shortcuts()
 
-        # restore window state (spec §5)
         geo = self.settings.value("window_geometry")
         if geo is not None:
             self.restoreGeometry(geo)
         if bool(self.settings.value("sidebar_collapsed", False)):
             self.sidebar.toggle_collapse(True)
 
-        # system theme re-poll (spec §2E) + tray-badge refresh
         self._sys_timer = QTimer(self)
         self._sys_timer.timeout.connect(self._poll_system_theme)
         self._sys_timer.start(10_000)
 
-        # first-run onboarding
-        self._onboarding = None
+        self._tips = None
         self._shown_once = False
 
     # ------------------------------------------------------------- theming
@@ -319,9 +288,11 @@ class MainWindow(QWidget):
         self.tok = theme_engine.apply(QApplication.instance(), self.theme, self.accent)
         self.settings.setValue("theme", self.theme)
         self.settings.setValue("accent", self.accent)
-        if hasattr(self, "titlebar"):
-            self.titlebar.refresh_theme()
-        self._health_dot_color()
+        if hasattr(self, "header"):
+            self.header.refresh_theme(self.theme)
+        if hasattr(self, "health_dot"):
+            self.health_dot.setStyleSheet(
+                f"color: {self.tok['success']}; background: transparent;")
 
     def set_theme(self, theme: str):
         if theme == self.theme and theme != "system":
@@ -339,24 +310,21 @@ class MainWindow(QWidget):
             self.settings_view._accent = accent
             self.settings_view._sync_visual_state()
 
-    _set_theme = set_theme               # legacy hook used by older callers
+    _set_theme = set_theme               # legacy hook
+
+    def _cycle_theme(self):
+        nxt = THEME_CYCLE[(THEME_CYCLE.index(self.theme) + 1) % len(THEME_CYCLE)]
+        self.set_theme(nxt)
+        self.settings_view._theme = nxt
+        self.settings_view._sync_visual_state()
+        self.toasts.toast(f"Theme: {nxt}", "info", 1600)
 
     def _poll_system_theme(self):
         if self.theme == "system":
-            # resolve() flips when the OS switches; re-apply when it does
-            if getattr(self, "_last_system", None) is None:
-                self._last_system = theme_engine.system_prefers_dark()
-            elif self._last_system != theme_engine.system_prefers_dark():
-                self._last_system = theme_engine.system_prefers_dark()
+            now = theme_engine.system_prefers_dark()
+            if getattr(self, "_last_system", None) != now:
+                self._last_system = now
                 self._apply_theme()
-
-    def _health_dot_color(self):
-        if not hasattr(self, "health_dot"):
-            return
-        tok = self.tok
-        color = tok["success"]
-        self.health_dot.setStyleSheet(f"color: {color}; background: transparent;")
-        self.health_dot.setToolTip("Network healthy")
 
     # ------------------------------------------------------------- navigation
 
@@ -372,6 +340,7 @@ class MainWindow(QWidget):
 
     def show_projects(self) -> None:
         self.sidebar.set_active(0)
+        self.projects_view.refresh()
         anim.cross_fade(self.stack, 0)
 
     def _goto_settings(self):
@@ -408,8 +377,7 @@ class MainWindow(QWidget):
         txt = f"{running} project{'s' if running != 1 else ''} running"
         if speed:
             txt += f" · {speed:.1f} MB/s"
-        paused = payload.get("paused")
-        if paused:
+        if payload.get("paused"):
             txt += " · paused"
         self.status_lbl.setText(txt)
         self._tray_badge(1 if running else 0)
@@ -464,7 +432,7 @@ class MainWindow(QWidget):
     @staticmethod
     def _headless_ready() -> bool:
         """Playwright browsers are deliberately NOT bundled (phase 8): the
-        one-time `playwright install chromium` is a user step (spec §11)."""
+        one-time `playwright install chromium` is a user step."""
         try:
             import glob
             root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
@@ -487,10 +455,8 @@ class MainWindow(QWidget):
         menu = QMenu()
         show_action = menu.addAction("Show")
         show_action.triggered.connect(self._restore_from_tray)
-        self.tray_pause = menu.addAction("Pause current project")
-        self.tray_pause.triggered.connect(self.pause)
-        self.tray_resume = menu.addAction("Resume current project")
-        self.tray_resume.triggered.connect(self.resume)
+        menu.addAction("Pause current project").triggered.connect(self.pause)
+        menu.addAction("Resume current project").triggered.connect(self.resume)
         menu.addSeparator()
         quit_action = menu.addAction("Quit")
         quit_action.triggered.connect(self.close)
@@ -505,21 +471,24 @@ class MainWindow(QWidget):
         self.activateWindow()
 
     def _tray_badge(self, count: int):
+        from PySide6.QtCore import QRectF as _RF
+
         if count <= 0:
             self.tray.setIcon(app_icon())
             self.tray.setToolTip(APP)
             return
-        tok = self.tok
         pm = app_icon().pixmap(64, 64)
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
         p.setBrush(QBrush(QColor("#E81123")))
-        p.setPen(QPen(QColor("#FFFFFF"), 3))
-        p.drawEllipse(38, 6, 22, 22)
-        f = QFont(); f.setBold(True); f.setPixelSize(14)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(38, 4, 24, 24)
+        f = QFont()
+        f.setBold(True)
+        f.setPixelSize(14)
         p.setFont(f)
         p.setPen(QColor("#FFFFFF"))
-        p.drawText(QRectF(38, 6, 22, 22), Qt.AlignCenter, str(count))
+        p.drawText(_RF(38, 4, 24, 24), Qt.AlignCenter, str(count))
         p.end()
         self.tray.setIcon(QIcon(pm))
         self.tray.setToolTip(f"{APP} — {count} download active")
@@ -546,15 +515,15 @@ class MainWindow(QWidget):
     def _palette_action(self, payload):
         kind, value = payload
         if kind == "nav":
-            self._goto(value)
+            if value == 0:
+                self.show_projects()
+            else:
+                self._goto_settings()
         elif kind == "action":
             if value == "new":
                 self.new_project()
             elif value == "theme":
-                order = ["system", "light", "dark", "midnight", "high_contrast"]
-                self.set_theme(order[(order.index(self.theme) + 1) % len(order)])
-                self.settings_view._theme = self.theme
-                self.settings_view._sync_visual_state()
+                self._cycle_theme()
             elif value == "toggle":
                 self.toggle_pause()
             elif value == "preview":
@@ -563,24 +532,16 @@ class MainWindow(QWidget):
             self._open_saved_summary(value)
 
     def _build_shortcuts(self):
-        from PySide6.QtGui import QKeySequence, QAction
-        acts = {
-            "palette": self._open_palette,
-            "new": lambda: self.new_project(),
-            "refresh": self._refresh_projects,
-            "settings": self._goto_settings,
-            "toggle": self.toggle_pause,
-        }
-        keys = {
-            "palette": "Ctrl+K",
-            "new": "Ctrl+N",
-            "refresh": "Ctrl+R",
-            "settings": "Ctrl+,",
-            "toggle": "Space",
-        }
-        for name, handler in acts.items():
+        from PySide6.QtGui import QAction, QKeySequence
+
+        for name, key, handler in (
+                ("palette", "Ctrl+K", self._open_palette),
+                ("new", "Ctrl+N", lambda: self.new_project()),
+                ("refresh", "Ctrl+R", self._refresh_projects),
+                ("settings", "Ctrl+,", self._goto_settings),
+                ("toggle", "Space", self.toggle_pause)):
             a = QAction(self)
-            a.setShortcut(QKeySequence(keys[name]))
+            a.setShortcut(QKeySequence(key))
             a.triggered.connect(handler)
             self.addAction(a)
 
@@ -628,7 +589,7 @@ class MainWindow(QWidget):
             self.new_project(seed_url=text.strip())
             event.acceptProposedAction()
 
-    # ------------------------------------------------------------- onboarding + show
+    # ------------------------------------------------------------- tips + show
 
     def showEvent(self, event):                    # noqa: N802 — Qt naming
         super().showEvent(event)
@@ -636,15 +597,25 @@ class MainWindow(QWidget):
             self._shown_once = True
             self.projects_view.refresh()
             if not bool(self.settings.value("onboarded", False)):
-                QTimer.singleShot(250, self._show_onboarding)
+                QTimer.singleShot(350, self._show_tips)
 
-    def _show_onboarding(self):
-        self._onboarding = Onboarding(self)
-        self._onboarding.setGeometry(self.rect())
-        self._onboarding.done.connect(
+    def _show_tips(self):
+        if not self.isVisible():
+            return
+        self._tips = TipCard(self)
+        self._tips.move(self.width() - self._tips.width() - 16,
+                        self.height() - self._tips.height() - 40)
+        self._tips.show()
+        self._tips.raise_()
+        self._tips.dismissed.connect(
             lambda: self.settings.setValue("onboarded", True))
-        self._onboarding.show()
-        anim.fade_in(self._onboarding)
+        anim.fade_in(self._tips)
+
+    def resizeEvent(self, event):                  # noqa: N802 — Qt naming
+        super().resizeEvent(event)
+        if getattr(self, "_tips", None) is not None and self._tips.isVisible():
+            self._tips.move(self.width() - self._tips.width() - 16,
+                            self.height() - self._tips.height() - 40)
 
     # ------------------------------------------------------------- close/save
 
@@ -664,64 +635,6 @@ class MainWindow(QWidget):
         self.settings.setValue("theme", self.theme)
         self.settings.setValue("accent", self.accent)
         super().closeEvent(event)
-
-    # ------------------------------------------------------------- frameless plumbing
-
-    def _hit_test(self, pos: QPoint) -> int:
-        """OS-level hit zones: resize edges, caption drag, client content."""
-        w, h = self.width(), self.height()
-        m = RESIZE_MARGIN
-        x, y = pos.x(), pos.y()
-        title = self.titlebar.geometry()
-        over_button = False
-        for b in (self.titlebar.min_btn, self.titlebar.max_btn, self.titlebar.close_btn):
-            if b.geometry().contains(self.titlebar.mapFrom(self, pos)):
-                over_button = True
-        if x < m and y < m:
-            return HTTOPLEFT
-        if x >= w - m and y < m:
-            return HTTOPRIGHT
-        if x < m and y >= h - m:
-            return HTBOTTOMLEFT
-        if x >= w - m and y >= h - m:
-            return HTBOTTOMRIGHT
-        if x < m:
-            return HTLEFT
-        if x >= w - m:
-            return HTRIGHT
-        if y < m:
-            return HTTOP
-        if y >= h - m:
-            return HTBOTTOM
-        if title.contains(pos) and not over_button:
-            return HTCAPTION
-        return HTCLIENT
-
-    def nativeEvent(self, eventType, message):     # noqa: N802 — Qt naming
-        if eventType == b"windows_generic_MSG":
-            msg = wintypes.MSG.from_address(int(message))
-            if msg.message == WM_NCHITTEST:
-                pos = self.mapFromGlobal(QPoint(msg.pt.x, msg.pt.y))
-                return True, self._hit_test(pos)
-            if msg.message == WM_NCLBUTTONDBLCLK:
-                self.showNormal() if self.isMaximized() else self.showMaximized()
-                return True, 0
-            if msg.message == WM_GETMINMAXINFO and self.isMaximized():
-                # keep the maximized frameless window inside the work area
-                mmi = wintypes.MINMAXINFO.from_address(msg.lParam)
-                hwnd = int(self.winId())
-                monitor = ctypes.windll.user32.MonitorFromWindow(
-                    hwnd, 2)              # MONITOR_DEFAULTTONEAREST
-                info = wintypes.MONITORINFOEX()
-                info.cbSize = ctypes.sizeof(wintypes.MONITORINFOEX)
-                if ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-                    wa = info.rcWork
-                    mmi.ptMaxPosition.x = wa.left
-                    mmi.ptMaxPosition.y = wa.top
-                    mmi.ptMaxSize.x = wa.right - wa.left
-                    mmi.ptMaxSize.y = wa.bottom - wa.top
-                    return True, 0
-        return super().nativeEvent(eventType, message)
 
     # ------------------------------------------------------------- legacy test hooks
 

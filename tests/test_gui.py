@@ -415,3 +415,129 @@ def test_preview_controller_serves_and_stops(qtbot, tmp_path):
     html = urllib.request.urlopen(url, timeout=5).read().decode()
     assert "site" in html
     pc.stop()
+
+
+# ------------------------------------------------- every surface is clickable
+
+def _settle(ms: int = 120):
+    end = time.monotonic() + ms / 1000
+    while time.monotonic() < end:
+        QApplication.processEvents()
+        time.sleep(0.01)
+
+
+def test_real_clicks_everywhere(qtbot, tmp_path, monkeypatch):
+    """Regression for 'can't even click': native QTest mouse clicks on every
+    major interactive surface — header, sidebar, settings swatches, chips,
+    project cards, and the wizard's step navigation."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    # --- a real saved project so cards exist
+    root = str(tmp_path / "projects")
+    os.makedirs(root)
+    base = make_site(5)
+    out = os.path.join(root, "site-a")
+    os.makedirs(out)
+    from app.core.crawler import Crawler
+
+    asyncio.run(Crawler(CrawlConfig(
+        seed=f"{base}/", output_dir=out, depth=1, concurrency=4,
+        delay=0.0, retries=0, state_db=os.path.join(out, "project.db"),
+    )).run())
+
+    # stub modal wizards so clicks can't block the test
+    from PySide6.QtWidgets import QDialog
+
+    class _FakeSignal:
+        def connect(self, *a, **k):
+            pass
+
+    class _StubWizard:
+        started = _FakeSignal()
+
+        def __init__(self, *a, **k):
+            pass
+
+        def exec(self):
+            return QDialog.Rejected
+    monkeypatch.setattr("app.gui.main_window.NewProjectWizard", _StubWizard)
+
+    win = MainWindow()
+    win.projects_root = root
+    win.projects_view.projects_root = root
+    win.show()
+    qtbot.addWidget(win)
+    win.show_projects()
+    _settle(400)
+
+    def click(widget):
+        QTest.mouseClick(widget, Qt.LeftButton, pos=QPoint(5, 5))
+        _settle(60)
+
+    # header: theme cycle button actually cycles the theme
+    before = win.theme
+    click(win.header.theme_btn)
+    assert win.theme != before or win.theme == "system"   # cycle moved (or wrap)
+    # header: new-project button (stubbed dialog) doesn't crash
+    click(win.header.new_btn)
+
+    # sidebar: nav buttons move pages; collapse toggles + restores
+    # (persisted QSettings decide the STARTING state, so assert relative flips)
+    click(win.sidebar._nav_buttons[2])
+    assert win.stack.currentIndex() == 2
+    click(win.sidebar._nav_buttons[0])
+    assert win.stack.currentIndex() == 0
+    started_collapsed = win.sidebar.is_collapsed()
+    click(win.sidebar._collapse_btn)
+    assert win.sidebar.is_collapsed() != started_collapsed
+    click(win.sidebar._collapse_btn)
+    assert win.sidebar.is_collapsed() == started_collapsed
+
+    # settings: theme + accent swatch clicks change the live theme
+    click(win.sidebar._nav_buttons[2])
+    click(win.settings_view._theme_buttons["dark"])
+    assert win.theme == "dark"
+    click(win.settings_view._accent_buttons["violet"])
+    assert win.accent == "violet"
+
+    # projects: chips filter the cards, resume emits a ready config
+    click(win.sidebar._nav_buttons[0])
+    _settle(300)
+    cards = win.projects_view.visible_cards()
+    assert len(cards) == 1
+    click(win.projects_view.chips["completed"])
+    assert [c.summary.name for c in win.projects_view.visible_cards()] == ["site-a"]
+    click(win.projects_view.chips["all"])
+
+    got = []
+    win.projects_view.resume_requested.connect(got.append)
+    # site-a is complete, so build a resumable one for the resume-button path
+    import sqlite3
+    con = sqlite3.connect(os.path.join(out, "project.db"))
+    con.execute("UPDATE urls SET status='pending' WHERE url LIKE '%p4.html'")
+    con.commit()
+    con.close()
+    win.projects_view.refresh()
+    _settle(300)
+    card = win.projects_view.visible_cards()[0]
+    assert card.resume_btn.isEnabled()
+    click(card.resume_btn)
+    assert len(got) == 1 and got[0].output_dir == out
+
+    # wizard: real clicks drive Back/Next across steps
+    from app.gui.new_project_wizard import NewProjectWizard as RealWizard
+    wiz = RealWizard(root)
+    qtbot.addWidget(wiz)
+    wiz.seed_edit.setText("https://example.com/")
+    click(wiz.next)                 # step 1 -> 2
+    assert wiz.stack.currentIndex() == 1
+    click(wiz.next)                 # -> 3
+    assert wiz.stack.currentIndex() == 2
+    click(wiz.back)                 # -> 2
+    assert wiz.stack.currentIndex() == 1
+    # profile card picks by click position
+    QTest.mouseClick(wiz._profile_cards["Docs site"], Qt.LeftButton)
+    assert wiz._profile == "Docs site"
+
+    win.close()
