@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fixture: relative links</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="favicon.ico">
+</head>
+<body background="img/bg.png">
+  <h1>Relative links fixture</h1>
+  <img src="img/hero.png" srcset="img/hero.png 1x, img/hero@2x.png 2x" alt="hero">
+  <img data-src="img/lazy.png" alt="lazy">
+  <a href="page2.html">Page two</a>
+  <a href="sub/ deeper page.html">Deep page (space + subfolder)</a>
+  <a href="https://example.com/external">External site link</a>
+  <a href="doc.pdf">PDF asset</a>
+  <script src="js/app.js"></script>
+  <div style="background:url('img/inline-styled.png')">styled</div>
+  <style>
+    body { background: url(img/style-block.png); }
+    @import url(more.css);
+  </style>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# virtualenv
+.venv/
+
+# build artifacts
+build/
+dist/
+*.spec.bak
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# local runs
+mirror_*/
+projects/
+*.log

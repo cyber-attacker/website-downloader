@@ -1,0 +1,7 @@
+aiohttp>=3.9,<4
+selectolax>=0.3.21
+aiosqlite>=0.20
+aiohttp-socks>=0.9          # optional: socks5:// proxies
+PySide6>=6.6
+qt-material>=2.14          # optional: theming (falls back to built-in QSS)
+playwright>=1.40           # optional: headless-browser crawling + login capture
