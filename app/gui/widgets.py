@@ -165,6 +165,63 @@ class EmptyState(QFrame):
             lay.addWidget(btn, 0, Qt.AlignHCenter)
 
 
+class Sparkline(QWidget):
+    """Rolling line chart of the last N samples (speed history on the live
+    dashboard). Painted with the active accent — theme-correct for free."""
+
+    def __init__(self, samples: int = 90, parent=None):
+        super().__init__(parent)
+        self._samples: list[float] = []
+        self._max_samples = samples
+        self.setMinimumHeight(36)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._peak = 0.0
+
+    def push(self, value: float) -> None:
+        self._samples.append(max(0.0, float(value)))
+        if len(self._samples) > self._max_samples:
+            self._samples.pop(0)
+        self._peak = max(self._samples) if self._samples else 0.0
+        self.update()
+
+    def clear(self) -> None:
+        self._samples.clear()
+        self._peak = 0.0
+        self.update()
+
+    def paintEvent(self, event):              # noqa: N802 — Qt naming
+        if len(self._samples) < 2:
+            return
+        tok = theme_engine.tokens()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        span = self._peak or 1.0
+        pts = []
+        for i, v in enumerate(self._samples):
+            x = i * (w - 2) / (len(self._samples) - 1) + 1
+            y = h - 3 - (v / span) * (h - 8)
+            pts.append(QPoint(int(x), int(y)))
+        # fill under the line
+        from PySide6.QtGui import QPolygon, QColor, QBrush
+        poly = QPolygon(pts + [pts[-1], pts[0]] + [QPoint(pts[0].x(), h - 2),
+                                                   QPoint(pts[-1].x(), h - 2)])
+        fill = QColor(tok["accent"])
+        fill.setAlpha(40)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(fill))
+        p.drawPolygon(poly)
+        # line
+        pen = QPen(QColor(tok["accent"]))
+        pen.setWidthF(1.6)
+        p.setPen(pen)
+        p.drawPolyline(QPolygon(pts))
+        # peak caption
+        p.setPen(QColor(tok["text2"]))
+        p.drawText(4, 12, f"peak {span:.1f}")
+        p.end()
+
+
 class SkeletonRows(QWidget):
     """Shimmer skeleton while a list first loads (spec §3/§5): soft gradient
     sweep left-to-right, no spinner, no blank screen."""

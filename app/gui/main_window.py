@@ -33,6 +33,7 @@ from app.core.types import CrawlConfig
 from app.gui import anim, theme_engine, widgets
 from app.gui.live_dashboard import LiveDashboard
 from app.gui.new_project_wizard import NewProjectWizard
+from app.gui.project_details import ProjectDetails
 from app.gui.projects_view import ProjectsView
 from app.gui.settings_view import SettingsView
 from app.gui.sidebar import Sidebar
@@ -88,10 +89,11 @@ class HeaderBar(QFrame):
 
         self.theme_btn = widgets.icon_btn(
             "moon", f"Theme: system — click to cycle ({' / '.join(THEME_CYCLE)})")
+        self.refresh_btn = widgets.icon_btn("sync-alt", "Refresh projects (Ctrl+R)")
         self.preview_btn = widgets.icon_btn("globe", "Preview the current mirror in your browser")
         self.new_btn = QPushButton("New Project")
         self.new_btn.setProperty("variant", "primary")
-        for b in (self.theme_btn, self.preview_btn, self.new_btn):
+        for b in (self.theme_btn, self.refresh_btn, self.preview_btn, self.new_btn):
             lay.addWidget(b)
 
     def refresh_theme(self, theme_name: str):
@@ -209,6 +211,7 @@ class MainWindow(QWidget):
 
         self.header = HeaderBar(self)
         self.header.theme_btn.clicked.connect(self._cycle_theme)
+        self.header.refresh_btn.clicked.connect(self._refresh_projects)
         self.header.new_btn.clicked.connect(lambda: self.new_project())
         root_lay.addWidget(self.header)
 
@@ -221,7 +224,7 @@ class MainWindow(QWidget):
             lambda c: self.settings.setValue("sidebar_collapsed", c))
         body.addWidget(self.sidebar)
 
-        # pages: projects (0), live dashboard (1), settings (2)
+        # pages: projects (0), live dashboard (1), settings (2), details (3)
         self.stack = QStackedWidget()
         projects_root = str(self.settings.value(
             "projects_root", os.path.join(os.getcwd(), "projects")))
@@ -232,9 +235,13 @@ class MainWindow(QWidget):
         self.settings_view = SettingsView(
             self.theme, self.accent, projects_root,
             bool(self.settings.value("start_minimized", False)))
+        self.settings_view.tray_check.setChecked(
+            bool(self.settings.value("close_to_tray", False)))
+        self.details = ProjectDetails()
         self.stack.addWidget(self.projects_view)
         self.stack.addWidget(self.dashboard)
         self.stack.addWidget(self.settings_view)
+        self.stack.addWidget(self.details)
         body.addWidget(self.stack, stretch=1)
         root_lay.addLayout(body, stretch=1)
 
@@ -259,10 +266,16 @@ class MainWindow(QWidget):
         self.projects_view.resume_requested.connect(self.start_project)
         self.projects_view.new_requested.connect(lambda: self.new_project())
         self.projects_view.open_summary_requested.connect(self._open_saved_summary)
+        self.projects_view.duplicate_requested.connect(self._duplicate_project)
+        self.details.back_requested.connect(self.show_projects)
+        self.details.resume_requested.connect(self.start_project)
+        self.details.preview_requested.connect(self._preview_folder)
         self.settings_view.theme_changed.connect(self.set_theme)
         self.settings_view.accent_changed.connect(self.set_accent)
         self.settings_view.minimized_check.toggled.connect(
             lambda v: self.settings.setValue("start_minimized", v))
+        self.settings_view.tray_check.toggled.connect(
+            lambda v: self.settings.setValue("close_to_tray", v))
         self.settings_view.root_edit.textChanged.connect(self._update_root)
 
         self._build_tray()
@@ -399,8 +412,31 @@ class MainWindow(QWidget):
         self.status_lbl.setText("Idle")
 
     def _open_saved_summary(self, summary: ProjectSummary):
-        self.dashboard.show_project_summary(summary)
-        anim.cross_fade(self.stack, 1)
+        """Double-click a project -> its details page (tree + actions)."""
+        self.details.set_summary(summary)
+        anim.cross_fade(self.stack, 3)
+
+    def _duplicate_project(self, summary: ProjectSummary):
+        """Context menu 'Duplicate settings into new project…': wizard
+        prefilled from the saved project's config, output folder fresh."""
+        from app.core.projects import config_for
+
+        wizard = NewProjectWizard(self.projects_root)
+        wizard.prefill_from_config(config_for(summary))
+        wizard.started.connect(self.start_project)
+        wizard.exec()
+
+    def _preview_folder(self, folder: str):
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.information(self, APP, "Nothing to preview.")
+            return
+        if getattr(self, "_preview", None) is None:
+            from app.gui.preview import PreviewController
+
+            self._preview = PreviewController(self)
+            self._preview.failed.connect(
+                lambda msg: self.toasts.toast(f"Preview failed: {msg}", "error"))
+        self._preview.open_mirror(folder)
 
     def _update_root(self, text: str):
         text = text.strip()
@@ -459,7 +495,7 @@ class MainWindow(QWidget):
         menu.addAction("Resume current project").triggered.connect(self.resume)
         menu.addSeparator()
         quit_action = menu.addAction("Quit")
-        quit_action.triggered.connect(self.close)
+        quit_action.triggered.connect(self._really_quit)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(
             lambda reason: self._restore_from_tray()
@@ -469,6 +505,11 @@ class MainWindow(QWidget):
     def _restore_from_tray(self):
         self.showNormal()
         self.activateWindow()
+
+    def _really_quit(self):
+        """Tray Quit always exits for real, even in close-to-tray mode."""
+        self._force_quit = True
+        self.close()
 
     def _tray_badge(self, count: int):
         from PySide6.QtCore import QRectF as _RF
@@ -505,6 +546,8 @@ class MainWindow(QWidget):
             ("New Project", "start a new mirror", ("action", "new")),
             ("Open Settings", "theme, accent, defaults", ("nav", 2)),
             ("Toggle theme", "light / dark cycle", ("action", "theme")),
+            ("Toggle sidebar", "collapse / expand the sidebar", ("action", "sidebar")),
+            ("Refresh projects", "rescan the projects folder", ("action", "refresh")),
             ("Pause / Resume", "the running project", ("action", "toggle")),
             ("Preview in browser", "serve the current mirror", ("action", "preview")),
         ]
@@ -524,6 +567,10 @@ class MainWindow(QWidget):
                 self.new_project()
             elif value == "theme":
                 self._cycle_theme()
+            elif value == "sidebar":
+                self.sidebar.toggle_collapse()
+            elif value == "refresh":
+                self._refresh_projects()
             elif value == "toggle":
                 self.toggle_pause()
             elif value == "preview":
@@ -539,7 +586,8 @@ class MainWindow(QWidget):
                 ("new", "Ctrl+N", lambda: self.new_project()),
                 ("refresh", "Ctrl+R", self._refresh_projects),
                 ("settings", "Ctrl+,", self._goto_settings),
-                ("toggle", "Space", self.toggle_pause)):
+                ("toggle", "Space", self.toggle_pause),
+                ("help", "F1", self._goto_settings)):    # shortcuts list lives there
             a = QAction(self)
             a.setShortcut(QKeySequence(key))
             a.triggered.connect(handler)
@@ -620,6 +668,20 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------- close/save
 
     def closeEvent(self, event):                   # noqa: N802 — Qt naming
+        # optional "keep running in the tray" mode (Settings → On close):
+        # hide instead of quit; the tray menu's Quit is the real exit
+        tray_mode = bool(self.settings.value("close_to_tray", False)) \
+            and not getattr(self, "_force_quit", False)
+        if tray_mode:
+            event.accept()
+            self.hide()
+            self.tray.setToolTip(APP + " — running in the tray")
+            if self.dashboard.worker is not None and self.dashboard.worker.isRunning():
+                self._tray_badge(1)
+            self.tray.showMessage(
+                APP, "Still running in the tray — right-click the tray icon to quit.",
+                QSystemTrayIcon.Information, 2500)
+            return
         worker = self.dashboard.worker
         if worker is not None and worker.isRunning():
             ret = QMessageBox.question(

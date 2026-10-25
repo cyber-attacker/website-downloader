@@ -157,3 +157,72 @@ def config_for(summary: ProjectSummary) -> CrawlConfig:
         exclude=exclude,
         state_db=db_path,
     )
+
+
+# ------------------------------------------------------------- page-tree load
+
+def load_page_tree(folder: str, limit: int = 4000) -> list[dict]:
+    """The saved crawl as a tree, from urls + link_edges (phase-4 GUI feed).
+
+    Returns a list of roots: [{"url", "path", "status", "children": [...]}]
+    keyed so the seed is the single root in the common case."""
+    db_path = os.path.join(folder, PROJECT_DB)
+    if not os.path.isfile(db_path):
+        return []
+    try:
+        con = _connect_ro(db_path)
+    except sqlite3.Error:
+        return []
+    nodes: dict[str, dict] = {}
+    edges: list[tuple[str, str]] = []
+    try:
+        cur = con.cursor()
+        for url, path, status in cur.execute(
+                "SELECT url, local_path, status FROM urls "
+                "WHERE local_path IS NOT NULL OR status != 'done'"):
+            nodes[url] = {"url": url,
+                         "path": path or "",
+                         "label": os.path.basename(path) if path else url,
+                         "status": status,
+                         "children": []}
+        for src, dst in cur.execute(
+                "SELECT u1.url, u2.url FROM link_edges e "
+                "JOIN urls u1 ON u1.id = e.from_id "
+                "JOIN urls u2 ON u2.id = e.to_id"):
+            edges.append((src, dst))
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+
+    children_of: dict[str, set[str]] = {}
+    pointed_at: set[str] = set()
+    for src, dst in edges:
+        if src in nodes and dst in nodes and src != dst:
+            children_of.setdefault(src, set()).add(dst)
+            pointed_at.add(dst)
+
+    roots = [url for url in nodes if url not in pointed_at]
+    if not roots:                                    # pure cycle safety net
+        roots = list(nodes)
+    out: list[dict] = []
+    visited: set[str] = set()
+
+    def build(url: str) -> dict | None:
+        if url in visited:
+            return None
+        visited.add(url)
+        node = dict(nodes[url])
+        for child in sorted(children_of.get(url, ())):
+            built = build(child)
+            if built is not None:
+                node["children"].append(built)
+        return node
+
+    for r in roots:
+        if len(out) >= 50:                           # sanity cap on forests
+            break
+        built = build(r)
+        if built is not None:
+            out.append(built)
+    return out

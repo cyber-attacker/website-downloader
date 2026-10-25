@@ -195,6 +195,9 @@ class SettingsView(QWidget):
         self.minimized_check = QCheckBox("Start minimized to the tray")
         self.minimized_check.setChecked(start_minimized)
         general.add_row("Startup", self.minimized_check)
+        self.tray_check = QCheckBox("Keep running in the tray when closed")
+        general.add_row("On close", self.tray_check,
+                        "Quit from the tray menu when you really mean it")
 
         # ---- Network defaults
         network = Section("Network defaults")
@@ -256,7 +259,8 @@ class SettingsView(QWidget):
 
     def current_general(self) -> dict:
         return {"projects_root": self.root_edit.text().strip(),
-                "start_minimized": self.minimized_check.isChecked()}
+                "start_minimized": self.minimized_check.isChecked(),
+                "close_to_tray": self.tray_check.isChecked()}
 
     def current_theme(self) -> str:
         return self._theme

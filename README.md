@@ -37,13 +37,13 @@ and proxy rotation against mock forward proxies. 98 tests, all green.
 
 ## Screenshots
 
-| Projects dashboard (dark · violet accent) | Live dashboard & log |
+| Projects dashboard (dark · violet accent) | Project details & crawl tree |
 |---|---|
-| ![Projects — dark](docs/img/projects_dark.png) | ![Live dashboard](docs/img/dashboard_dark.png) |
+| ![Projects — dark](docs/img/projects_dark.png) | ![Project details](docs/img/details_dark.png) |
 
-| New Project wizard | Settings (themes & accents) | Projects — light |
-|---|---|---|
-| ![Wizard](docs/img/wizard_dark.png) | ![Settings](docs/img/settings_dark.png) | ![Projects — light](docs/img/projects_light.png) |
+| Live dashboard & log | New Project wizard | Settings (themes & accents) | Projects — light |
+|---|---|---|---|
+| ![Live dashboard](docs/img/dashboard_dark.png) | ![Wizard](docs/img/wizard_dark.png) | ![Settings](docs/img/settings_dark.png) | ![Projects — light](docs/img/projects_light.png) |
 
 ## The interface
 
@@ -68,13 +68,22 @@ pro-tool ergonomics:
 - **Live dashboard** — four count-up stat cards (pages / assets / speed /
   ETA), a large animated progress bar, a live **site-map tree**, and a
   color-coded, filterable, auto-scrolling **log panel**.
-- **Pro-tool ergonomics** — command palette (**Ctrl+K**), global shortcuts
-  (Ctrl+N/R/,, Space), system-tray integration with an active-download badge
-  and native completion notifications, drag-and-drop a URL from any browser
-  straight into the wizard, right-click context menus on project cards
-  (Resume / Open / Export .zip / Rename / Delete), skeleton-loading shimmer,
-  designed empty and error states, tooltips everywhere, first-run
-  onboarding, and auto-saved window state.
+- **Pro-tool ergonomics** — command palette (**Ctrl+K**) with project + action
+  search, global shortcuts (Ctrl+N/R/`,`/Space, F1 for the shortcut list),
+  system-tray integration with an active-download badge, **close-to-tray
+  mode** (the X hides to the tray; crawls keep running; tray-Quit exits for
+  real), drag-and-drop a URL from any browser straight into the wizard,
+  right-click context menus on project cards (Resume / Open / Export .zip /
+  Rename / **Duplicate settings into a new prefilled project** / Delete),
+  skeleton-loading shimmer, designed empty and error states, tooltips
+  everywhere, first-run tips, and auto-saved window state.
+- **Project details page** — double-click any project to open its saved
+  crawl as an interactive **page tree built from the `link_edges` graph** in
+  project.db (double-click a page to open the saved file), with stats,
+  Resume, Open folder, browser preview and one-click **Export as .zip**.
+- **Live dashboard extras** — a rolling **speed-history sparkline** painted
+  in the active accent, and an activity log you can **export to file** or
+  clear, filtered live by severity.
 
 ## Feature tour
 
@@ -88,7 +97,8 @@ pro-tool ergonomics:
 | Shared motion helper + designed widgets (cards, pills, skeletons) | `app/gui/anim.py`, `widgets.py` |
 | Six-step New Project wizard with slide transitions | `app/gui/new_project_wizard.py` |
 | Projects dashboard: cards, filters, chips, sort, context menus | `app/gui/projects_view.py` |
-| Live dashboard: count-up stats, site-map tree, filterable log | `app/gui/live_dashboard.py` |
+| Project details: crawl tree from link_edges, export .zip | `app/gui/project_details.py` |
+| Live dashboard: count-up stats, sparkline, site-map tree, log panel | `app/gui/live_dashboard.py` |
 | Settings: live theme swatches, accent picker, shortcuts list | `app/gui/settings_view.py` |
 | Local preview server (proper MIME, directory URLs) | `app/core/preview_server.py` |
 | Full-text search over saved pages (SQLite FTS5) | `app/core/search_index.py` |
@@ -216,12 +226,12 @@ Resumed: 45 kept from the previous run, 0 requeued
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-98 tests: URL/mapping units, rewriter fixtures, state-db units (lifecycle,
+106 tests: URL/mapping units, rewriter fixtures, state-db units (lifecycle,
 crash states), kill-mid-crawl → resume equivalence (byte-identical mirrors),
 proxy rotation against mock forward proxies, theme-engine generation,
-offscreen Qt tests for the worker/window/wizard/projects-view/toasts,
-preview-server + FTS5 tests, and headless-mode acceptance (JS-rendered
-content captured in headless mode, missed in plain HTTP).
+offscreen Qt tests for the worker/window/wizard/projects-view/details-view/
+toasts, preview-server + FTS5 tests, and headless-mode acceptance
+(JS-rendered content captured in headless mode, missed in plain HTTP).
 
 ## Packaging
 

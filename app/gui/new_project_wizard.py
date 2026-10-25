@@ -460,6 +460,24 @@ class NewProjectWizard(QDialog):
             f"<span style='color:{theme_engine.tokens()['text2']}'>"
             f"{k}</span>&nbsp;&nbsp;<b>{v}</b>" for k, v in rows))
 
+    # ---------------------------------------------------------------- prefill
+
+    def prefill_from_config(self, cfg: CrawlConfig) -> None:
+        """Duplicate-settings flow: load a saved project's config into the
+        wizard (seed + scope + network), leaving the output folder fresh."""
+        self.seed_edit.setText(cfg.seed)
+        self._auto_name()
+        self.name_edit._touched = False
+        self._pick_profile("Custom")
+        self._slide_to(0)
+        self.depth_spin.setValue(cfg.depth)
+        self.scope.set_current(1 if cfg.allow_subdomains else 0)
+        if cfg.exclude:
+            self.exclude_edit.setPlainText("\n".join(cfg.exclude))
+        self.cookie_edit.setText("; ".join(cfg.cookies))
+        self.error_label.setText("Duplicated settings — pick a new project name "
+                                 "and output folder, then Start.")
+
     # ---------------------------------------------------------------- config
 
     def config(self) -> CrawlConfig | None:

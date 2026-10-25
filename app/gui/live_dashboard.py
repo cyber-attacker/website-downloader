@@ -48,6 +48,12 @@ class LogPanel(QGroupBox):
         self.filter.changed.connect(lambda _i: self._rerender())
         bar.addWidget(self.filter)
         bar.addStretch(1)
+        self.export_btn = widgets.icon_btn("save", "Save the log to a file")
+        self.export_btn.clicked.connect(self._export)
+        self.clear_btn = widgets.icon_btn("trash", "Clear the log")
+        self.clear_btn.clicked.connect(self.clear)
+        bar.addWidget(self.export_btn)
+        bar.addWidget(self.clear_btn)
         self.count_lbl = QLabel("0 lines")
         self.count_lbl.setProperty("muted", True)
         bar.addWidget(self.count_lbl)
@@ -107,6 +113,26 @@ class LogPanel(QGroupBox):
         self._severity_of_row.clear()
         self.view.clear()
         self.count_lbl.setText("0 lines")
+
+    def _export(self):
+        if not self._lines:
+            return
+        import os
+        from PySide6.QtWidgets import QFileDialog
+        default = os.path.join(os.path.expanduser("~"), "Downloads",
+                               "crawl-log.txt")
+        path, _ = QFileDialog.getSaveFileName(self, "Save activity log",
+                                              default, "Text file (*.txt)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                for severity, text in self._lines:
+                    fh.write(f"[{severity:>7}] {text}\n")
+        except OSError:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Website Downloader",
+                                "Could not write the log file.")
 
 
 class LiveDashboard(QWidget):
@@ -174,6 +200,17 @@ class LiveDashboard(QWidget):
         status_row.addStretch(1)
         status_row.addWidget(self.labels["output"])
         lay.addLayout(status_row)
+
+        # ---- speed history sparkline (rolls with every progress tick)
+        speed_box = widgets.Card()
+        speed_lay = QVBoxLayout(speed_box)
+        speed_lay.setContentsMargins(14, 8, 14, 8)
+        cap = QLabel("Download speed history (MB/s)")
+        cap.setProperty("muted", True)
+        speed_lay.addWidget(cap)
+        self.sparkline = widgets.Sparkline(samples=90)
+        speed_lay.addWidget(self.sparkline)
+        lay.addWidget(speed_box)
 
         # ---- split: site-map tree + log
         split = QHBoxLayout()
@@ -349,6 +386,7 @@ class LiveDashboard(QWidget):
             anim.count_up(self.stat_speed.number, self._last_speed_x10, speed_x10,
                           fmt="{:.1f}")
             self._last_speed_x10 = speed_x10
+        self.sparkline.push(payload.get("mbps_recent", 0))
         # ETA from the recent page rate
         remaining = pages_seen - done
         elapsed = payload.get("elapsed_s", 0.1) or 0.1

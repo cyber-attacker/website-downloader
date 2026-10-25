@@ -51,8 +51,9 @@ class ProjectCard(Card):
     """One saved project: name, seed, status pill, animated progress bar,
     counts, last run, hover actions. Right-click for the context menu."""
 
-    open_requested = Signal(object)          # ProjectSummary
+    open_requested = Signal(object)          # ProjectSummary (double-click)
     resume_requested = Signal(object)       # ProjectSummary
+    duplicate_requested = Signal(object)    # ProjectSummary
     changed = Signal()                      # list mutated (rename/delete/export)
 
     def __init__(self, summary: ProjectSummary, parent=None):
@@ -111,6 +112,11 @@ class ProjectCard(Card):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
 
+    def mouseDoubleClickEvent(self, event):        # noqa: N802 — Qt naming
+        if event.button() == Qt.LeftButton:
+            self.open_requested.emit(self.summary)
+        super().mouseDoubleClickEvent(event)
+
     def _open_folder(self):
         os.startfile(self.summary.folder)            # noqa: S606 — user-initiated
 
@@ -138,7 +144,7 @@ class ProjectCard(Card):
         elif chosen.text() == "Rename…":
             self._rename()
         elif chosen.text().startswith("Duplicate"):
-            self.duplicate_requested = True         # read by the view after menu
+            self.duplicate_requested.emit(s)
         elif chosen is dele:
             self._delete()
 
@@ -188,6 +194,7 @@ class ProjectsView(QWidget):
     resume_requested = Signal(object)      # CrawlConfig
     new_requested = Signal()
     open_summary_requested = Signal(object)
+    duplicate_requested = Signal(object)  # ProjectSummary -> prefilled wizard
 
     def __init__(self, projects_root: str, parent=None):
         super().__init__(parent)
@@ -365,6 +372,7 @@ class ProjectsView(QWidget):
             card = ProjectCard(s)
             card.resume_requested.connect(self._resume)
             card.open_requested.connect(self.open_summary_requested.emit)
+            card.duplicate_requested.connect(self.duplicate_requested.emit)
             card.changed.connect(self.refresh)
             self.list_lay.insertWidget(self.list_lay.count() - 1, card)
             anim.fade_in(card, anim.DUR["enter"], slide_up=8)

@@ -541,3 +541,177 @@ def test_real_clicks_everywhere(qtbot, tmp_path, monkeypatch):
     assert wiz._profile == "Docs site"
 
     win.close()
+
+
+# ------------------------------------------------- new-feature coverage
+
+def test_project_details_view(qtbot, tmp_path):
+    """Double-click target: the details page renders the real crawl tree
+    from urls + link_edges, with live action buttons."""
+    from app.core.projects import read_summary
+    from app.gui.project_details import ProjectDetails
+
+    root = str(tmp_path / "projects")
+    os.makedirs(root)
+    base = make_site(5)
+    out = os.path.join(root, "site-d")
+    os.makedirs(out)
+    from app.core.crawler import Crawler
+
+    asyncio.run(Crawler(CrawlConfig(
+        seed=f"{base}/", output_dir=out, depth=1, concurrency=4,
+        delay=0.0, retries=0, state_db=os.path.join(out, "project.db"),
+    )).run())
+
+    details = ProjectDetails()
+    qtbot.addWidget(details)
+    details.set_summary(read_summary(out))
+    assert details.name_lbl.text() == "site-d"
+    assert details.seed_lbl.text().startswith("http://127.0.0.1:")
+    assert details.pill.text() == "Completed"
+    assert details.resume_btn.isVisible() is False          # complete project
+    assert int(details.tree_count.text().split()[0].replace(",", "")) >= 7
+    # tree roots + children exist (seed -> pages)
+    assert details.tree.topLevelItemCount() == 1
+    assert details.tree.topLevelItem(0).childCount() >= 5
+    # resume button appears for resumable projects
+    import sqlite3
+    con = sqlite3.connect(os.path.join(out, "project.db"))
+    con.execute("UPDATE urls SET status='pending' WHERE url LIKE '%p4.html'")
+    con.commit()
+    con.close()
+    details.set_summary(read_summary(out))
+    assert details.resume_btn.isHidden() is False
+    got = []
+    details.resume_requested.connect(got.append)
+    details.resume_btn.click()
+    assert len(got) == 1 and got[0].output_dir == out
+
+
+def test_details_page_reached_by_double_click(qtbot, tmp_path):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    root = str(tmp_path / "projects")
+    os.makedirs(root)
+    base = make_site(5)
+    out = os.path.join(root, "site-x")
+    os.makedirs(out)
+    from app.core.crawler import Crawler
+
+    asyncio.run(Crawler(CrawlConfig(
+        seed=f"{base}/", output_dir=out, depth=1, concurrency=4,
+        delay=0.0, retries=0, state_db=os.path.join(out, "project.db"),
+    )).run())
+    win = MainWindow()
+    win.projects_root = root
+    win.projects_view.projects_root = root
+    win.show()
+    qtbot.addWidget(win)
+    win.show_projects()
+    _settle(400)
+    card = win.projects_view.visible_cards()[0]
+    QTest.mouseDClick(card, Qt.LeftButton, pos=QPoint(10, 10))  # -> details
+    _settle(400)
+    assert win.stack.currentIndex() == 3
+    assert win.details.name_lbl.text() == "site-x"
+    # Back button returns to the projects page
+    back = win.details.findChild(type(win.details.resume_btn), "Back") \
+        or [b for b in win.details.findChildren(type(win.details.resume_btn))
+            if b.toolTip() == "Back to Projects"][0]
+    QTest.mouseClick(back, Qt.LeftButton)
+    _settle(400)
+    assert win.stack.currentIndex() == 0
+    win.close()
+
+
+def test_wizard_prefill_from_config(qtbot, tmp_path):
+    """Duplicate-settings: a saved project's config lands in the wizard."""
+    from app.core.projects import config_for, read_summary
+
+    root = str(tmp_path / "projects")
+    os.makedirs(root)
+    base = make_site(5)
+    out = os.path.join(root, "site-c")
+    os.makedirs(out)
+    from app.core.crawler import Crawler
+
+    asyncio.run(Crawler(CrawlConfig(
+        seed=f"{base}/", output_dir=out, depth=1, concurrency=4,
+        delay=0.0, retries=0, state_db=os.path.join(out, "project.db"),
+        exclude=("*cart*",),
+    )).run())
+
+    wiz = NewProjectWizard(root)
+    qtbot.addWidget(wiz)
+    wiz.prefill_from_config(config_for(read_summary(out)))
+    assert wiz.seed_edit.text().startswith("http://127.0.0.1:")
+    assert wiz._profile == "Custom"
+    assert wiz.exclude_edit.toPlainText().strip() == "*cart*"
+    assert wiz.error_label.text()                       # duplicate hint shown
+
+
+def test_sparkline_rolls(qtbot):
+    from app.gui.widgets import Sparkline
+
+    sp = Sparkline(samples=5)
+    qtbot.addWidget(sp)
+    for v in (0.1, 0.4, 0.2, 0.9, 0.5, 0.7):
+        sp.push(v)
+    assert len(sp._samples) == 5            # rolling window respected
+    assert sp._peak == 0.9
+    sp.clear()
+    assert sp._samples == []
+
+
+def test_close_to_tray_mode(qtbot):
+    """With 'Keep running in the tray when closed', the X button hides the
+    window (crawl-safe); tray Quit still exits for real."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = MainWindow()
+    win.show()
+    qtbot.addWidget(win)
+    win.settings.setValue("close_to_tray", True)
+    win.settings_view.tray_check.setChecked(True)
+    win.show_projects()
+    win.close()
+    assert not win.isVisible()                        # hidden, not destroyed
+    win._really_quit()                               # force-real exit path
+    assert getattr(win, "_force_quit", False)
+    win.settings.setValue("close_to_tray", False)    # leave clean
+
+
+def test_f1_opens_settings(qtbot):
+    """The F1 shortcut is registered on the window and opens Settings."""
+    win = MainWindow()
+    win.show()
+    qtbot.addWidget(win)
+    f1 = [a for a in win.actions() if a.shortcut().toString() == "F1"]
+    assert f1, "F1 shortcut not registered"
+    f1[0].trigger()
+    _settle(200)
+    assert win.stack.currentIndex() == 2
+    win.close()
+
+
+def test_log_export(qtbot, tmp_path, monkeypatch):
+    """The live dashboard's log writes to disk."""
+    from PySide6.QtWidgets import QFileDialog
+
+    log_path = tmp_path / "log.txt"
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(log_path), "")))
+    from app.gui.live_dashboard import LogPanel
+
+    panel = LogPanel()
+    qtbot.addWidget(panel)
+    panel.add("info", "saved index.html")
+    panel.add("error", "HTTP 404 /x")
+    panel.export_btn.click()
+    text = log_path.read_text(encoding="utf-8")
+    assert "saved index.html" in text and "404" in text
+    panel.clear_btn.click()
+    assert panel.view.count() == 0
