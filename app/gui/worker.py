@@ -18,6 +18,7 @@ from app.core.types import CrawlConfig
 
 class ProjectWorker(QThread):
     # the phase-4 signal contract
+    page_event = Signal(dict)             # full page payload (url, path, referer)
     page_downloaded = Signal(str, str)      # url, output-relative path
     asset_downloaded = Signal(str, str)     # url, output-relative path
     progress_updated = Signal(dict)         # stats snapshot + paused/cancelled
@@ -56,6 +57,7 @@ class ProjectWorker(QThread):
     def _emit(self, kind: str, payload: dict) -> None:
         """Called on the worker's loop thread; Qt queues the emission."""
         if kind == "page":
+            self.page_event.emit(dict(payload))
             self.page_downloaded.emit(payload.get("url", ""), payload.get("path", ""))
         elif kind == "asset":
             self.asset_downloaded.emit(payload.get("url", ""), payload.get("path", ""))

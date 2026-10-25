@@ -385,7 +385,8 @@ class Crawler:
         await self.storage.write(rec.path, _raw_bytes(text, rec.charset or "utf-8"))
         self.stats.pages_saved += 1
         if self.on_progress is not None:
-            self.on_progress("page", {"url": job.url, "path": rec.path})
+            self.on_progress("page", {"url": job.url, "path": rec.path,
+                                      "referer": job.referer})
 
         # ---- enqueue children
         for ref in ext.links:

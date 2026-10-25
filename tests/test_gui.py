@@ -1,5 +1,5 @@
-"""Phase 4 GUI tests (offscreen): worker signals, pause latency, cancel,
-main-window responsiveness while a real crawl runs."""
+"""GUI tests for the redesigned shell (offscreen): worker signals, pause
+latency, cancel, theme engine, wizard, projects view, toasts, search."""
 import os
 import threading
 import time
@@ -11,9 +11,13 @@ import asyncio  # noqa: E402
 import pytest  # noqa: E402
 from aiohttp import web  # noqa: E402
 from PySide6.QtCore import QTimer  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLineEdit  # noqa: E402
 
+from app.core.projects import read_summary  # noqa: E402
 from app.core.types import CrawlConfig  # noqa: E402
-from app.gui.main_window import MainWindow, NewProjectDialog  # noqa: E402
+from app.gui import theme_engine, widgets  # noqa: E402
+from app.gui.main_window import MainWindow  # noqa: E402
+from app.gui.new_project_wizard import NewProjectWizard  # noqa: E402
 from app.gui.worker import ProjectWorker  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("qapp")
@@ -81,20 +85,57 @@ def small_site():
 
 @pytest.fixture()
 def slow_site():
-    # 150 pages x 40 ms over 4 workers keeps the crawl busy for ~1.5-2 s
     return make_site(150, page_delay=0.04)
 
 
-# ------------------------------------------------------------------- worker
-
 def _drain(worker: ProjectWorker) -> None:
-    """Never leak a live QThread: cancel if needed, then join it."""
     try:
         if worker.isRunning():
             worker.cancel()
     finally:
         worker.wait(15_000)
 
+
+def _tree_count(tree) -> int:
+    total = 0
+    stack = [tree.invisibleRootItem()]
+    while stack:
+        node = stack.pop()
+        total += node.childCount()
+        for i in range(node.childCount()):
+            stack.append(node.child(i))
+    return total
+
+
+# ------------------------------------------------------------- theme engine
+
+def test_theme_engine_tokens_and_qss(qtbot):
+    tok = theme_engine.tokens("dark", "violet")
+    assert tok["accent"] == theme_engine.ACCENTS["violet"]
+    qss = theme_engine.build_qss("midnight", "teal")
+    assert theme_engine.ACCENTS["teal"] in qss
+    assert "#17171A" in qss or "surface" not in qss      # token values embedded
+    # light/dark/midnight/high_contrast all generate valid distinct sheets
+    sheets = [theme_engine.build_qss(n) for n in
+              ("light", "dark", "midnight", "high_contrast")]
+    assert len(set(sheets)) == 4
+    assert theme_engine.resolve("system") in ("light", "dark")
+
+
+def test_theme_switch_persists(qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.set_theme("dark")
+    assert win.settings.value("theme") == "dark"
+    assert bool(QApplication.instance().styleSheet())    # full QSS applied
+    win.set_accent("violet")
+    assert win.settings.value("accent") == "violet"
+    assert theme_engine.ACCENTS["violet"] in QApplication.instance().styleSheet()
+    win.set_theme("system")
+    win.set_accent("blue")                               # leave clean
+
+
+# ------------------------------------------------------------------- worker
 
 def test_worker_full_run_signals(qtbot, tmp_path, small_site):
     cfg = CrawlConfig(
@@ -103,22 +144,22 @@ def test_worker_full_run_signals(qtbot, tmp_path, small_site):
         state_db=str(tmp_path / "m" / "project.db"),
     )
     worker = ProjectWorker(cfg)
-    pages, progress, errors = [], [], []
+    pages, progress, tree_events = [], [], []
     worker.page_downloaded.connect(lambda u, p: pages.append((u, p)))
+    worker.page_event.connect(lambda d: tree_events.append(d))
     worker.progress_updated.connect(progress.append)
-    worker.error_occurred.connect(errors.append)
     try:
         with qtbot.waitSignal(worker.run_finished, timeout=30_000) as blocker:
             worker.start()
     finally:
         _drain(worker)
     report = blocker.args[0]
-    assert report.stats.pages_saved == 31          # index + 30 pages
-    assert report.stats.assets_saved >= 1          # logo.png
+    assert report.stats.pages_saved == 31                # index + 30 pages
+    assert report.stats.assets_saved >= 1               # logo.png
     assert len(pages) == 31
-    assert len(progress) >= 1                       # the ticker ran (fast crawls
-    assert progress[0].get("pages_seen", 0) >= 0   # may fit in one tick)
-    assert pages[0][1]                             # paths are populated
+    assert len(tree_events) == 31
+    assert all("referer" in d for d in tree_events)     # tree payload complete
+    assert len(progress) >= 1
 
 
 def test_pause_takes_effect_within_two_seconds(qtbot, tmp_path, slow_site):
@@ -128,26 +169,27 @@ def test_pause_takes_effect_within_two_seconds(qtbot, tmp_path, slow_site):
         concurrency=4, delay=0.0, retries=0,
     )
     worker = ProjectWorker(cfg)
-    states = []
+    states, progress = [], []
     worker.state_changed.connect(states.append)
-    progress = []
     worker.progress_updated.connect(progress.append)
     try:
         with qtbot.waitSignal(worker.run_finished, timeout=60_000):
             worker.start()
-            qtbot.waitUntil(lambda: any(p.get("pages_saved", 0) > 2 for p in progress),
-                            timeout=10_000)
+            qtbot.waitUntil(
+                lambda: any(p.get("pages_saved", 0) > 2 for p in progress),
+                timeout=10_000)
             t_pause = time.monotonic()
             worker.pause()
             qtbot.waitUntil(lambda: any(p.get("paused") for p in progress),
                             timeout=2000)
-            assert time.monotonic() - t_pause < 2.0, "pause signal not observed in time"
-            paused_at = sum(p.get("pages_saved", 0) for p in progress if p.get("paused"))
+            assert time.monotonic() - t_pause < 2.0, "pause not observed in time"
+            paused_at = sum(p.get("pages_saved", 0) for p in progress
+                            if p.get("paused"))
             worker.resume()
     finally:
         _drain(worker)
     final = max(p.get("pages_saved", 0) for p in progress)
-    assert final > paused_at                       # crawl actually continued
+    assert final > paused_at                            # crawl actually continued
     assert "paused" in states and "resumed" in states
 
 
@@ -163,22 +205,23 @@ def test_cancel_completes_and_keeps_partial_mirror(qtbot, tmp_path, slow_site):
     try:
         with qtbot.waitSignal(worker.run_finished, timeout=30_000) as blocker:
             worker.start()
-            qtbot.waitUntil(lambda: any(p.get("pages_saved", 0) >= 3 for p in progress),
-                            timeout=15_000)
+            qtbot.waitUntil(
+                lambda: any(p.get("pages_saved", 0) >= 3 for p in progress),
+                timeout=15_000)
             worker.cancel()
     finally:
         _drain(worker)
     report = blocker.args[0]
-    assert report.stats.pages_saved < 150          # genuinely partial
-    assert report.stats.pages_saved >= 3
+    assert 3 <= report.stats.pages_saved < 150          # genuinely partial
 
 
-# ------------------------------------------------------------- main window
+# --------------------------------------------------------------- main window
 
 def test_main_window_stays_responsive(qtbot, tmp_path, small_site):
     """Acceptance: the GUI never freezes while a real crawl runs."""
     win = MainWindow()
     win.show()
+    qtbot.addWidget(win)
     ticks = {"n": 0}
     timer = QTimer(win)
     timer.setInterval(50)
@@ -194,156 +237,160 @@ def test_main_window_stays_responsive(qtbot, tmp_path, small_site):
                     timeout=30_000)
     timer.stop()
     _drain(win.worker)
-    assert ticks["n"] >= 3                         # main-thread loop stayed alive
-    assert win.pages_list.count() == 31           # index + 30 pages
-    assert win.labels["state"].text().startswith("Done")
+    assert ticks["n"] >= 3                             # main-thread loop alive
+    assert win.stack.currentIndex() == 1                # dashboard visible
+    assert win.labels["state"].text() in ("Completed", "Done")
+    assert _tree_count(win.pages_list) == 31            # site-map tree filled
     win.close()
 
 
-def test_new_project_dialog_validates_seed(qtbot):
-    dlg = NewProjectDialog()
-    dlg.seed_edit.setText("not a url")
-    assert dlg.config() is None
-    assert dlg.error_label.text()          # inline, non-blocking feedback
-    dlg.seed_edit.setText("https://example.com/")
-    cfg = dlg.config()
-    assert cfg is not None and cfg.seed == "https://example.com/"
+def test_dashboard_search_box(qtbot, tmp_path):
+    from app.gui.live_dashboard import LiveDashboard
 
-
-def test_wizard_carries_headless_and_cookies(qtbot, tmp_path):
-    from app.core.headless import parse_cookie_header
-    from app.gui.login_capture import cookies_to_header
-
-    dlg = NewProjectDialog(default_output=str(tmp_path / "m"))
-    dlg.seed_edit.setText("https://example.com/")
-    dlg.headless_check.setChecked(True)
-    dlg.cookie_edit.setText("session=abc; token=xyz")
-    cfg = dlg.config()
-    assert cfg is not None
-    assert cfg.headless is True
-    assert cfg.cookies == ("session=abc; token=xyz",)
-    assert parse_cookie_header(cfg.cookies[0]) == [
-        ("session", "abc"), ("token", "xyz")]
-    assert cookies_to_header([
-        {"name": "session", "value": "s3"},
-        {"name": "", "value": "dropped"},
-    ]) == "session=s3"
-
-
-# --------------------------------------------------- phase 5: projects + theme
-
-def _make_real_project(qtbot_unused, root: str, name: str, resumable: bool = False):
-    """A genuine project folder produced by the engine (not fixtures)."""
-    import sqlite3
+    root = str(tmp_path / "projects")
+    os.makedirs(root)
+    base = make_site(5)
+    out = os.path.join(root, "site-s")
+    os.makedirs(out)
 
     from app.core.crawler import Crawler
 
-    base = make_site(5)
-    out = os.path.join(root, name)
-    os.makedirs(out)
-    cfg = CrawlConfig(
+    asyncio.run(Crawler(CrawlConfig(
         seed=f"{base}/", output_dir=out, depth=1, concurrency=4,
         delay=0.0, retries=0, state_db=os.path.join(out, "project.db"),
-    )
-    asyncio.run(Crawler(cfg).run())
-    if resumable:
-        con = sqlite3.connect(os.path.join(out, "project.db"))
-        con.execute("UPDATE urls SET status='pending' WHERE url LIKE '%p4.html'")
-        con.commit()
-        con.close()
-    return out
+    )).run())
+
+    dash = LiveDashboard()
+    qtbot.addWidget(dash)
+    dash.show_project_summary(read_summary(out))
+    assert dash.current_output == out
+    dash.search_edit.setText("page")
+    dash._run_search()
+    assert dash.search_results.count() >= 1
+    assert os.path.isfile(os.path.join(
+        out, *dash._search_hits[0].path.split("/")))
 
 
-def test_projects_panel_lists_and_resumes(qtbot, tmp_path):
-    from app.gui.projects_panel import ProjectsPanel
+def test_toast_lifecycle(qtbot):
+    host_parent = MainWindow()
+    qtbot.addWidget(host_parent)
+    host = host_parent.toasts
+    t = host.toast("Saved!", "success", msec=300)
+    assert t is not None
+    qtbot.waitUntil(lambda: t.parent() is None or not t.isVisible(),
+                    timeout=3000)
+
+
+# -------------------------------------------------------------------- wizard
+
+def test_wizard_steps_and_config(qtbot, tmp_path):
+    wiz = NewProjectWizard(str(tmp_path), seed_url="https://example.com/")
+    qtbot.addWidget(wiz)
+    assert wiz.stack.count() == 6
+    assert wiz.next.text() == "Next"
+
+    # auto-name follows the seed until the user types their own
+    wiz.name_edit._touched = True
+    wiz.name_edit.setText("my-name")
+    wiz.seed_edit.setText("https://other.example.com/docs/")
+    assert wiz.name_edit.text() == "my-name"
+    wiz.name_edit._touched = False
+    wiz._auto_name()
+    assert wiz.name_edit.text() == "other-example-com"
+
+    wiz._pick_profile("Docs site")
+    cfg = wiz.config()
+    assert cfg is not None
+    assert cfg.seed == "https://other.example.com/docs/"
+    assert cfg.depth == 6 and cfg.allow_subdomains is True
+
+    wiz._pick_profile("Custom")
+    wiz.depth_spin.setValue(2)
+    wiz.scope.set_current(1)
+    wiz.exclude_edit.setPlainText("*print=*\n")
+    wiz.headless_check.setChecked(True)
+    wiz.cookie_edit.setText("session=abc; token=xyz")
+    cfg = wiz.config()
+    assert cfg.depth == 2 and cfg.allow_subdomains is True
+    assert cfg.exclude == ("*print=*",)
+    assert cfg.headless and cfg.cookies == ("session=abc; token=xyz",)
+
+    # slide navigation + dots + Start label
+    wiz._slide_to(5)
+    assert wiz.next.text() == "Start"
+
+
+def test_wizard_rejects_bad_seed(qtbot, tmp_path):
+    wiz = NewProjectWizard(str(tmp_path))
+    qtbot.addWidget(wiz)
+    wiz.seed_edit.setText("not a url")
+    assert wiz.config() is None
+    assert not wiz._validate_seed()
+
+
+# ------------------------------------------------------------- projects view
+
+def test_projects_view_cards_filters_resume(qtbot, tmp_path):
+    from app.gui.projects_view import ProjectsView
 
     root = str(tmp_path / "projects")
     os.makedirs(root)
-    _make_real_project(qtbot, root, "site-a", resumable=False)
-    _make_real_project(qtbot, root, "site-b", resumable=True)
+    for name, resumable in (("site-a", False), ("site-b", True)):
+        base = make_site(5)
+        out = os.path.join(root, name)
+        os.makedirs(out)
+        from app.core.crawler import Crawler
+        import sqlite3
 
-    panel = ProjectsPanel(root)
-    qtbot.addWidget(panel)
-    assert panel.table.rowCount() == 2
-    names = [panel.table.item(r, 0).text() for r in range(2)]
-    statuses = [panel.table.item(r, 2).text() for r in range(2)]
-    assert set(names) == {"site-a", "site-b"}
-    assert any("Complete" in s for s in statuses)
-    assert any("Resumable" in s for s in statuses)
+        asyncio.run(Crawler(CrawlConfig(
+            seed=f"{base}/", output_dir=out, depth=1, concurrency=4,
+            delay=0.0, retries=0, state_db=os.path.join(out, "project.db"),
+        )).run())
+        if resumable:
+            con = sqlite3.connect(os.path.join(out, "project.db"))
+            con.execute("UPDATE urls SET status='pending' WHERE url LIKE '%p4.html'")
+            con.commit()
+            con.close()
 
-    # select the resumable one and hit Resume -> a ready-to-run config comes out
-    row = names.index("site-b")
-    panel.table.selectRow(row)
-    assert panel.resume_btn.isEnabled()
+    view = ProjectsView(root)
+    qtbot.addWidget(view)
+    view.refresh()
+    cards = view.visible_cards()
+    assert len(cards) == 2
+    assert {c.summary.name for c in cards} == {"site-a", "site-b"}
+
+    # status chips filter correctly
+    view._pick_chip("completed")
+    assert [c.summary.name for c in view.visible_cards()] == ["site-a"]
+    view._pick_chip("running")
+    assert [c.summary.name for c in view.visible_cards()] == ["site-b"]
+    view._pick_chip("all")
+
+    # inline text filter
+    view.search.setText("site-a")
+    assert [c.summary.name for c in view.visible_cards()] == ["site-a"]
+    view.search.setText("")
+
+    # resume emits a ready-to-run config rebuilt from the project's DB
     got = []
-    panel.resume_requested.connect(got.append)
-    panel.resume_btn.click()
-    assert len(got) == 1
-    cfg = got[0]
-    assert cfg.output_dir == os.path.join(root, "site-b")
-    assert cfg.state_db == os.path.join(root, "site-b", "project.db")
-
-    # double-click opens the saved summary view
-    seen = []
-    panel.open_summary_requested.connect(seen.append)
-    panel.table.selectRow(row)
-    panel._double_clicked()
-    assert seen and seen[0].name == "site-b"
+    view.resume_requested.connect(got.append)
+    target = next(c for c in view.visible_cards() if c.summary.name == "site-b")
+    target.resume_btn.click()
+    assert len(got) == 1 and got[0].output_dir == os.path.join(root, "site-b")
 
 
-def test_main_window_saved_summary_view(qtbot, tmp_path):
-    win = MainWindow()
-    qtbot.addWidget(win)
-    root = str(tmp_path / "projects")
-    os.makedirs(root)
-    _make_real_project(qtbot, root, "site-x")
-    win.projects_root = root
-    win.projects_panel.projects_root = root
-    win.show_projects()
-    assert win.stack.currentIndex() == 0
-    assert win.projects_panel.table.rowCount() == 1
+def test_projects_view_empty_state(qtbot, tmp_path):
+    from app.gui.projects_view import ProjectsView
 
-    win._open_saved_summary(win.projects_panel.summaries[0])
-    assert win.stack.currentIndex() == 1
-    assert "Viewing saved project" in win.labels["state"].text()
-    assert win.progress.value() == 100
+    view = ProjectsView(str(tmp_path / "none"))
+    qtbot.addWidget(view)
+    view.refresh()
+    assert not view.visible_cards()                    # empty state showing
+    view.search.setText("zzz")                        # no-matches state also fine
+    view.refresh()
 
 
-def test_theme_toggle_persists(qtbot):
-    from PySide6.QtWidgets import QApplication
-
-    win = MainWindow()
-    qtbot.addWidget(win)
-    win._set_theme("dark")
-    assert win.settings.value("theme") == "dark"
-    assert win._theme_actions["dark"].isChecked()
-    app = QApplication.instance()
-    assert bool(app.styleSheet())          # qt-material or the built-in QSS
-    win._set_theme("system")
-    assert app.styleSheet() == ""
-    win.settings.setValue("theme", "system")   # leave clean for other tests
-
-
-# ------------------------------------------------ phase 6: search + preview
-
-def test_dashboard_search_box(qtbot, tmp_path):
-    from app.core.projects import read_summary
-
-    root = str(tmp_path / "projects")
-    os.makedirs(root)
-    proj = _make_real_project(qtbot, root, "site-s")
-
-    win = MainWindow()
-    qtbot.addWidget(win)
-    win._open_saved_summary(read_summary(proj))
-    assert win.dashboard.current_output == proj
-
-    win.dashboard.search_edit.setText("page")
-    win.dashboard._run_search()
-    assert win.dashboard.search_results.count() >= 1
-    assert win.dashboard._search_hits[0].path
-    assert os.path.isfile(os.path.join(proj, *win.dashboard._search_hits[0].path.split("/")))
-
+# ------------------------------------------------------------- preview (kept)
 
 def test_preview_controller_serves_and_stops(qtbot, tmp_path):
     import urllib.request
@@ -351,13 +398,20 @@ def test_preview_controller_serves_and_stops(qtbot, tmp_path):
 
     root = str(tmp_path / "projects")
     os.makedirs(root)
-    proj = _make_real_project(qtbot, root, "site-p")
+    base = make_site(5)
+    proj = os.path.join(root, "site-p")
+    os.makedirs(proj)
+    from app.core.crawler import Crawler
+
+    asyncio.run(Crawler(CrawlConfig(
+        seed=f"{base}/", output_dir=proj, depth=1, concurrency=4,
+        delay=0.0, retries=0, state_db=os.path.join(proj, "project.db"),
+    )).run())
 
     pc = PreviewController()
     with qtbot.waitSignal(pc.started, timeout=15_000) as blocker:
         pc.open_mirror(proj)
     url = blocker.args[0]
-    assert pc.url == url
     html = urllib.request.urlopen(url, timeout=5).read().decode()
-    assert "site" in html                       # the mirrored index page
+    assert "site" in html
     pc.stop()

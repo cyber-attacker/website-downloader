@@ -33,7 +33,48 @@ a memory** — and gets the offline details right that they don't:
 **Engineering guarantees, not claims** — each bold behavior above has an
 automated acceptance test: kill-and-resume byte-equivalence, exactly-once
 fetching, `file://` resolution audits, JS-capture in headless vs plain HTTP,
-and proxy rotation against mock forward proxies. 96 tests, all green.
+and proxy rotation against mock forward proxies. 98 tests, all green.
+
+## Screenshots
+
+| Projects dashboard (dark · violet accent) | Live dashboard & log |
+|---|---|
+| ![Projects — dark](docs/img/projects_dark.png) | ![Live dashboard](docs/img/dashboard_dark.png) |
+
+| New Project wizard | Settings (themes & accents) | Projects — light |
+|---|---|---|
+| ![Wizard](docs/img/wizard_dark.png) | ![Settings](docs/img/settings_dark.png) | ![Projects — light](docs/img/projects_light.png) |
+
+## The interface
+
+A frameless, custom-designed desktop app — token-driven theming, motion, and
+pro-tool ergonomics:
+
+- **Theme engine** — every color, radius, spacing and animation duration is a
+  *token* in one module; QSS is generated per theme. Five themes — **Light,
+  Dark, Midnight (OLED), High-contrast, System** — switch instantly (no
+  restart) and persist, plus a swatch **accent picker** (blue / teal /
+  violet / coral / green) that overrides the accent across any theme.
+- **Motion, done natively** — cross-faded page transitions, sliding wizard
+  steps with animated dot indicators, count-up stat numbers, animated progress
+  fills, card entrance fades, pulsing "Running" pill, toast notifications that
+  slide in with countdown bars — all via one shared `animate()` helper, all
+  150–250 ms with `OutCubic`, and **all disabled (<50 ms) when the OS
+  "reduce animations" accessibility setting is on**.
+- **New Project wizard** — six steps (Seed → Profile → Scope → Network →
+  Output → Review) with profile presets (Blog / Docs / E-commerce / Single
+  page / Custom), sliders with live readouts, and a horizontal slide between
+  steps.
+- **Live dashboard** — four count-up stat cards (pages / assets / speed /
+  ETA), a large animated progress bar, a live **site-map tree**, and a
+  color-coded, filterable, auto-scrolling **log panel**.
+- **Pro-tool ergonomics** — command palette (**Ctrl+K**), global shortcuts
+  (Ctrl+N/R/,, Space), system-tray integration with an active-download badge
+  and native completion notifications, drag-and-drop a URL from any browser
+  straight into the wizard, right-click context menus on project cards
+  (Resume / Open / Export .zip / Rename / Delete), skeleton-loading shimmer,
+  designed empty and error states, tooltips everywhere, first-run
+  onboarding, and auto-saved window state.
 
 ## Feature tour
 
@@ -42,8 +83,13 @@ and proxy rotation against mock forward proxies. 96 tests, all green.
 | Async crawler + two-pass offline rewriter (engine core) | `app/core/crawler.py`, `rewriter.py` |
 | Crash-safe SQLite queue: kill/resume, identical result | `app/core/state_db.py` |
 | Rotating, health-checked proxies + UA rotation | `app/core/proxy_manager.py` |
-| PySide6 GUI: wizard, live dashboard, Pause/Resume/Cancel | `app/gui/` |
-| Projects dashboard + dark/light/system theming | `app/gui/projects_panel.py`, `theme.py` |
+| Theme tokens → QSS (5 themes + accent picker, reduced-motion) | `app/gui/theme_engine.py` |
+| Frameless shell: title bar, sidebar, tray, palette, shortcuts, toasts | `app/gui/main_window.py` |
+| Shared motion helper + designed widgets (cards, pills, skeletons) | `app/gui/anim.py`, `widgets.py` |
+| Six-step New Project wizard with slide transitions | `app/gui/new_project_wizard.py` |
+| Projects dashboard: cards, filters, chips, sort, context menus | `app/gui/projects_view.py` |
+| Live dashboard: count-up stats, site-map tree, filterable log | `app/gui/live_dashboard.py` |
+| Settings: live theme swatches, accent picker, shortcuts list | `app/gui/settings_view.py` |
 | Local preview server (proper MIME, directory URLs) | `app/core/preview_server.py` |
 | Full-text search over saved pages (SQLite FTS5) | `app/core/search_index.py` |
 | Headless Chromium crawling + login capture (Playwright) | `app/core/headless.py`, `app/gui/login_capture.py` |
@@ -146,19 +192,23 @@ Resumed: 45 kept from the previous run, 0 requeued
 
 ## The GUI
 
-- **New Project wizard** — seed URL, depth, concurrency, output folder,
-  politeness, proxies, cookies, and a "Log in first…" button that opens a
-  visible browser and captures your session cookies.
-- **Live dashboard** — progress bar, page/asset counters, speed, errors;
+- **New Project wizard** — six steps (Seed → Profile → Scope → Network →
+  Output → Review) with profile presets, live-readout sliders, cookie paste
+  and a "Log in first…" button that opens a visible browser and captures
+  your session cookies.
+- **Live dashboard** — count-up stat cards (pages / assets / speed / ETA),
+  animated progress, a live site-map tree and a color-coded filterable log;
   Pause takes effect between in-flight requests (well under the 2 s
   acceptance), Resume/Cancel keep the project consistent.
-- **Projects panel** — every project under the projects root with status,
-  progress, last-run time (read from each `project.db`); Resume re-runs from
-  the row, double-click opens the saved-project view.
+- **Projects dashboard** — every project as a card (status pill, animated
+  progress, last run) read from each `project.db`; inline search, status
+  chips and sorting; Resume re-runs from the row, double-click opens the
+  saved-project view; right-click for Export .zip / Rename / Delete.
 - **Search** — type in the saved-pages box and press Enter; double-click a
   hit to open the local file.
 - **Preview in browser** — serves the mirror with correct MIME types.
-- **Theming** — dark/light/system, persisted in settings.
+- **Theming** — Light / Dark / Midnight / High-contrast / System plus an
+  accent-color picker, token-generated, instant, persisted.
 
 ## Testing
 
@@ -166,11 +216,12 @@ Resumed: 45 kept from the previous run, 0 requeued
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-96 tests: URL/mapping units, rewriter fixtures, state-db units (lifecycle,
+98 tests: URL/mapping units, rewriter fixtures, state-db units (lifecycle,
 crash states), kill-mid-crawl → resume equivalence (byte-identical mirrors),
-proxy rotation against mock forward proxies, offscreen Qt tests for the
-worker/window/panel, preview-server + FTS5 tests, and headless-mode acceptance
-(JS-rendered content captured in headless mode, missed in plain HTTP).
+proxy rotation against mock forward proxies, theme-engine generation,
+offscreen Qt tests for the worker/window/wizard/projects-view/toasts,
+preview-server + FTS5 tests, and headless-mode acceptance (JS-rendered
+content captured in headless mode, missed in plain HTTP).
 
 ## Packaging
 
@@ -195,14 +246,19 @@ worker/window/panel, preview-server + FTS5 tests, and headless-mode acceptance
 app/
   cli.py                 # argparse entry: flags -> CrawlConfig -> Crawler.run()
   gui/
-    __main__.py          # window entry (+ --cli passthrough), frozen teardown
-    main_window.py       # shell: pages, menus, theme, settings, preview
-    crawl_dashboard.py   # wizard + live dashboard + search box
-    projects_panel.py    # saved projects list, resume, open
+    __main__.py          # window entry (+ --cli passthrough), splash, frozen teardown
+    main_window.py       # frameless shell: title bar, sidebar, tray, palette, shortcuts
+    theme_engine.py      # design tokens -> per-theme QSS; accents; reduced-motion
+    anim.py              # the one animate() helper + cross-fades + count-ups
+    widgets.py           # cards, pills, stat cards, toasts, skeletons, empty states
+    sidebar.py           # icon nav with animated collapse
+    projects_view.py     # projects dashboard: cards, filters, chips, context menus
+    new_project_wizard.py # six-step wizard with slide transitions
+    live_dashboard.py    # stat cards, animated progress, site-map tree, log panel
+    settings_view.py     # live theme swatches, accent picker, shortcuts list
     worker.py            # ProjectWorker(QThread): engine <-> Qt signals
     login_capture.py     # visible-browser login -> session cookies
-    preview.py           # thread-bound preview server
-    theme.py             # qt-material dark/light with QSS fallback
+    preview.py           # thread-owned preview server
   core/
     crawler.py           # orchestrator: queue, scope, redirects, finalize, verify
     downloader.py        # aiohttp pool, backoff, robots gate, proxy rotation
