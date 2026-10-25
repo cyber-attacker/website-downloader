@@ -5,7 +5,7 @@
 ; user to run `playwright install chromium` once if they use headless mode.
 
 #define MyAppName "Website Downloader"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "Website Downloader project"
 #define MyAppExeName "WebsiteDownloader.exe"
 

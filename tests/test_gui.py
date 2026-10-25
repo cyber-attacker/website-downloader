@@ -715,3 +715,29 @@ def test_log_export(qtbot, tmp_path, monkeypatch):
     assert "saved index.html" in text and "404" in text
     panel.clear_btn.click()
     assert panel.view.count() == 0
+
+
+# --------------------------------------------------- launcher regression
+
+def test_launcher_delegates_all_paths_to_app_run(monkeypatch):
+    """The launcher must hand BOTH gui and --cli runs to app.gui.__main__.run
+    — that function owns the frozen NUL-stream + os._exit teardown. Bypassing
+    it (an earlier bug) made packaged windowed builds hang at shutdown after
+    completing a --cli crawl."""
+    import run_gui
+
+    seen = {}
+    monkeypatch.setattr("app.gui.__main__.run",
+                        lambda: (seen.__setitem__("ok", 1), 101)[1])
+    monkeypatch.setattr(run_gui, "in_project_venv", lambda: True)
+    assert run_gui.run() == 101
+    assert seen["ok"] == 1
+
+    # same for the deps-available branch (never reach the real re-exec,
+    # which would spawn an actual GUI on a machine with a .venv)
+    monkeypatch.setattr(run_gui, "in_project_venv", lambda: False)
+    monkeypatch.setattr(run_gui, "_have_deps", lambda: True)
+    monkeypatch.setattr(run_gui, "venv_python", lambda gui: r"Z:\nowhere\pw.exe")
+    seen.clear()
+    assert run_gui.run() == 101
+    assert seen["ok"] == 1

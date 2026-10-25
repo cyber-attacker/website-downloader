@@ -91,10 +91,11 @@ def run() -> int:
     if not is_cli and any(a in ("-h", "--help") for a in sys.argv[1:]):
         is_cli = True
 
-    # already inside the project venv: run directly
+    # already inside the project venv: hand off to the app entry, whose run()
+    # owns --cli routing AND the frozen-teardown fixes (NUL streams + direct
+    # exit). The CLI path MUST flow through it too, or windowed builds hang
+    # at interpreter shutdown after the crawl.
     if in_project_venv():
-        if is_cli:
-            return _run_cli(args)
         from app.gui.__main__ import run as run_app
 
         return run_app()
@@ -113,8 +114,6 @@ def run() -> int:
 
     # no venv, but running in an environment where deps are importable:
     if _have_deps():
-        if is_cli:
-            return _run_cli(args)
         from app.gui.__main__ import run as run_app
 
         return run_app()
@@ -133,12 +132,6 @@ def run() -> int:
             "    packaging\\build_windows.ps1   (builds WebsiteDownloader.exe)\n"
             "or set up the environment as described in README.md.")
     return 1
-
-
-def _run_cli(args: list[str]) -> int:
-    from app.cli import main as cli_main
-
-    return cli_main(args)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,14 @@ def main() -> int:
 
 
 def run() -> int:
+    if getattr(sys, "frozen", False):
+        # frozen windowed builds: std streams can be fully detached, and a
+        # bare NULL handle blocks at the C level on write. Give Python real
+        # NUL-device streams up front so print/flush always work, detached
+        # or not (also makes --cli usable from scheduled tasks).
+        for name in ("stdout", "stderr"):
+            if getattr(sys, name, None) is None:
+                setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
     code = main()
     if getattr(sys, "frozen", False):
         # frozen windowed builds can stall in interpreter teardown (Qt +
